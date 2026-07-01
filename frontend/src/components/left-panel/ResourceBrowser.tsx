@@ -142,7 +142,7 @@ export function ResourceBrowser() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    useUIStore.getState().setActiveView('data-preview')
+                    useUIStore.getState().setActiveView('dataset-editor')
                   }}
                   className="flex items-center justify-center h-4 w-4 rounded hover:bg-blue-500/10 text-maia-text-muted hover:text-blue-500 transition-colors"
                   title="添加数据集"

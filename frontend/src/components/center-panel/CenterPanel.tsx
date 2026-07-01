@@ -8,6 +8,7 @@ import { AgentEditorView } from './AgentEditorView'
 import { AgentDetailView } from './AgentDetailView'
 import { ToolEditorView } from './ToolEditorView'
 import { ToolDetailView } from './ToolDetailView'
+import { DatasetEditorView } from './DatasetEditorView'
 
 export function CenterPanel() {
   const { activeView } = useUIStore()
@@ -73,5 +74,7 @@ function ViewRouter({ view }: { view: ActiveView }) {
       return <ToolEditorView />
     case 'tool-detail':
       return <ToolDetailView />
+    case 'dataset-editor':
+      return <DatasetEditorView />
   }
 }

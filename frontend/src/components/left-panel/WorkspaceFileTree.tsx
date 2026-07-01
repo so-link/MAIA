@@ -6,6 +6,8 @@ import {
   Folder,
   Search,
   Upload,
+  FolderInput,
+  Trash2,
   MoreVertical,
   Activity,
   Image,
@@ -21,6 +23,7 @@ import { useChatStore } from '@/stores/chat-store'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { DatasetImportDialog } from './DatasetImportDialog'
 import type { FileTreeNode, FileCategory } from '@/types/workspace'
 
 const FILE_ICONS: Record<FileCategory, typeof File> = {
@@ -66,6 +69,27 @@ export function WorkspaceFileTree() {
     e.dataTransfer.effectAllowed = 'copy'
   }
 
+  const [showImport, setShowImport] = useState(false)
+
+  const handleImportDataset = (dsNode: FileTreeNode) => {
+    const { root, persist } = useFileTreeStore.getState()
+    if (root) {
+      root.children = [...(root.children || []), dsNode]
+      useFileTreeStore.setState({ root: { ...root } })
+      persist()
+    }
+    setShowImport(false)
+  }
+
+  const handleClear = () => {
+    const { root, persist } = useFileTreeStore.getState()
+    if (root) {
+      root.children = []
+      useFileTreeStore.setState({ root: { ...root } })
+      persist()
+    }
+  }
+
   const handleDoubleClick = (node: FileTreeNode) => {
     selectFile(node)
     if (node.type === 'file') {
@@ -94,25 +118,38 @@ export function WorkspaceFileTree() {
         </div>
       </div>
 
-      {/* Upload */}
-      <div className="px-3 pb-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleUpload}
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full text-[11px] tracking-wider h-7 border-maia-border text-maia-text-secondary hover:bg-maia-sidebar-hover"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-        >
-          <Upload className="h-3 w-3" />
-          {uploading ? '上传中...' : '上传数据'}
-        </Button>
+      {/* Upload / Import / Clear */}
+      <div className="px-3 pb-2 space-y-1">
+        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload} />
+        <div className="flex gap-1">
+          <Button
+            variant="outline" size="sm"
+            className="flex-1 text-[11px] tracking-wider h-7 border-maia-border text-maia-text-secondary hover:bg-maia-sidebar-hover"
+            onClick={() => fileInputRef.current?.click()} disabled={uploading}
+          >
+            <Upload className="h-3 w-3" />
+            {uploading ? '上传中...' : '上传'}
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            className="flex-1 text-[11px] tracking-wider h-7 border-maia-border text-maia-text-secondary hover:bg-maia-sidebar-hover"
+            onClick={() => setShowImport(true)}
+            title="从数据空间导入已注册的数据集"
+          >
+            <FolderInput className="h-3 w-3" />
+            导入
+          </Button>
+        </div>
+        {root?.children && root.children.length > 0 && (
+          <Button
+            variant="ghost" size="sm"
+            className="w-full text-[11px] tracking-wider h-6 text-maia-text-muted hover:text-maia-danger hover:bg-red-50"
+            onClick={handleClear}
+          >
+            <Trash2 className="h-3 w-3" />
+            清空工作区
+          </Button>
+        )}
       </div>
 
       {/* File tree */}
@@ -142,6 +179,13 @@ export function WorkspaceFileTree() {
           </p>
         )}
       </div>
+
+      {showImport && (
+        <DatasetImportDialog
+          onImport={handleImportDataset}
+          onClose={() => setShowImport(false)}
+        />
+      )}
     </div>
   )
 }

@@ -10,6 +10,7 @@ export type ActiveView =
   | 'agent-detail'
   | 'tool-editor'
   | 'tool-detail'
+  | 'dataset-editor'
 
 interface UIState {
   leftPanelOpen: boolean

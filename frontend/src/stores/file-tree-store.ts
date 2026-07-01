@@ -1,8 +1,33 @@
 import { create } from 'zustand'
 import type { FileTreeNode } from '@/types/workspace'
-import { MockFileService } from '@/services/mock/files'
 
-const fileService = new MockFileService()
+const STORAGE_KEY = 'maia-workspace-tree'
+
+function loadPersisted(): FileTreeNode | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return null
+}
+
+function persistTree(tree: FileTreeNode) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tree))
+  } catch { /* ignore */ }
+}
+
+function emptyTree(): FileTreeNode {
+  return {
+    id: 'root',
+    name: '工作区间',
+    type: 'directory',
+    category: 'folder',
+    path: '/workspace',
+    expanded: true,
+    children: [],
+  }
+}
 
 interface FileTreeState {
   root: FileTreeNode | null
@@ -16,6 +41,7 @@ interface FileTreeState {
   uploadFiles: (files: FileList) => Promise<void>
   setSearchQuery: (query: string) => void
   getFilteredTree: () => FileTreeNode | null
+  persist: () => void
 }
 
 export const useFileTreeStore = create<FileTreeState>((set, get) => ({
@@ -26,8 +52,14 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
 
   loadTree: async () => {
     set({ isLoading: true })
-    const tree = await fileService.getTree()
-    set({ root: tree, isLoading: false })
+    // 1. 尝试从 localStorage 恢复
+    const persisted = loadPersisted()
+    if (persisted) {
+      set({ root: persisted, isLoading: false })
+      return
+    }
+    // 2. 首次启动：空工作区间
+    set({ root: emptyTree(), isLoading: false })
   },
 
   selectFile: (node) => set({ selectedFile: node }),
@@ -35,49 +67,37 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   toggleExpand: (nodeId) => {
     const { root } = get()
     if (!root) return
-
     const toggleIn = (n: FileTreeNode): FileTreeNode => {
       if (n.id === nodeId) return { ...n, expanded: !n.expanded }
       if (n.children) return { ...n, children: n.children.map(toggleIn) }
       return n
     }
-
-    set({ root: toggleIn(root) })
+    const newRoot = toggleIn(root)
+    set({ root: newRoot })
+    persistTree(newRoot)
   },
 
   uploadFiles: async (files: FileList) => {
-    const fileArray = Array.from(files)
     const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001'
+    let { root } = get()
+    if (!root) root = emptyTree()
 
-    for (const file of fileArray) {
+    for (const file of Array.from(files)) {
       try {
         const formData = new FormData()
         formData.append('file', file)
-        const res = await fetch(`${BASE_URL}/api/file/upload`, {
-          method: 'POST',
-          body: formData,
-        })
+        const res = await fetch(`${BASE_URL}/api/file/upload`, { method: 'POST', body: formData })
         if (!res.ok) continue
         const uploaded = await res.json()
-        // 将上传成功的文件插入到文件树
-        const { root } = get()
-        if (root) {
-          const newNode: FileTreeNode = {
-            id: uploaded.id,
-            name: uploaded.fileName,
-            type: 'file',
-            category: 'unknown',
-            path: uploaded.filePath,        // ← 服务器上的真实路径
-            format: uploaded.format,
-            size: uploaded.fileSize,
-          }
-          root.children = [...(root.children || []), newNode]
-          set({ root: { ...root } })
+        const newNode: FileTreeNode = {
+          id: uploaded.id, name: uploaded.fileName, type: 'file', category: 'unknown',
+          path: uploaded.filePath, format: uploaded.format, size: uploaded.fileSize,
         }
-      } catch {
-        // 上传失败，跳过
-      }
+        root = { ...root, children: [...(root.children || []), newNode] }
+      } catch { /* ignore */ }
     }
+    set({ root })
+    persistTree(root)
   },
 
   setSearchQuery: (query) => set({ searchQuery: query }),
@@ -85,17 +105,17 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   getFilteredTree: () => {
     const { root, searchQuery } = get()
     if (!root || !searchQuery.trim()) return root
-
     const filter = (n: FileTreeNode): FileTreeNode | null => {
-      const nameMatch = n.name.toLowerCase().includes(searchQuery.toLowerCase())
-      if (n.type === 'file') return nameMatch ? n : null
-
-      const filteredChildren = n.children?.map(filter).filter(Boolean) as FileTreeNode[]
-      if (filteredChildren.length > 0 || nameMatch) {
-        return { ...n, children: filteredChildren, expanded: true }
-      }
-      return null
+      const m = n.name.toLowerCase().includes(searchQuery.toLowerCase())
+      if (n.type === 'file') return m ? n : null
+      const filtered = n.children?.map(filter).filter(Boolean) as FileTreeNode[]
+      return filtered?.length > 0 || m ? { ...n, children: filtered, expanded: true } : null
     }
     return filter(root)
+  },
+
+  persist: () => {
+    const { root } = get()
+    if (root) persistTree(root)
   },
 }))

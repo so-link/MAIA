@@ -19,11 +19,11 @@ export const dataApi = {
     return res.json() as Promise<{ spec_md: string }>
   },
 
-  async register(specMd: string, datasetName: string, dataPath: string, fileCount: number, totalSize: number, formats: string[]) {
+  async register(specMd: string, datasetName: string, dataPath: string, fileCount: number, totalSize: number, formats: string[], sourceFiles: string[] = []) {
     const idMatch = specMd.match(/^id:\s*(.+)$/m)
     const res = await fetch(`${BASE_URL}/api/data/register`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ specMd, datasetId: idMatch?.[1]?.trim() || '', datasetName, dataPath, fileCount, totalSize, formats }),
+      body: JSON.stringify({ specMd, datasetId: idMatch?.[1]?.trim() || '', datasetName, dataPath, fileCount, totalSize, formats, sourceFiles }),
     })
     if (!res.ok) throw new Error((await res.json().catch(() => ({ detail: res.statusText }))).detail)
     return res.json() as Promise<{ dataset_id: string; entry: Record<string, unknown> }>

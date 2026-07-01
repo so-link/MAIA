@@ -23,6 +23,7 @@ class RegisterDatasetRequest(BaseModel):
     dataset_id: str = Field(default="", alias="datasetId")
     dataset_name: str = Field(default="", alias="datasetName")
     data_path: str = Field(default="", alias="dataPath")
+    source_files: list[str] = Field(default_factory=list, alias="sourceFiles")
     file_count: int = 0
     total_size: int = 0
     formats: list[str] = Field(default_factory=list)

@@ -14,6 +14,31 @@ from app.api.schemas.data_schemas import (
 )
 from core.llm.client import create_llm_client
 from core.resource.registry.data_registry import DataRegistry
+def _parse_files_from_spec(spec_md: str) -> list[dict]:
+    """从 MD 规范的"数据格式"表格中解析文件列表"""
+    files = []
+    in_table = False
+    for line in spec_md.split("\n"):
+        if "数据格式" in line:
+            in_table = True
+            continue
+        if in_table and line.startswith("##"):
+            break
+        if in_table and line.startswith("|") and "文件" not in line and "---" not in line:
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if len(parts) >= 3 and parts[0]:
+                try:
+                    size_str = parts[2].replace("KB", "").replace("MB", "").replace("B", "").strip()
+                    size = float(size_str) * 1024 if "KB" in parts[2] else float(size_str) * 1048576 if "MB" in parts[2] else float(size_str) if size_str else 0
+                except ValueError:
+                    size = 0
+                files.append({
+                    "name": parts[0], "format": parts[1].lower() if len(parts) > 1 else "",
+                    "size": int(size), "description": parts[3] if len(parts) > 3 else "",
+                })
+    return files
+
+
 from core.resource.discoverer.data_discoverer import DataDiscoverer
 from core.resource.registry.tool_registry import ToolRegistry
 from core.resource.discoverer.tool_discoverer import ToolDiscoverer
@@ -25,55 +50,58 @@ tool_registry = ToolRegistry()
 tool_discoverer = ToolDiscoverer()
 llm = create_llm_client()
 
-SPEC_PROMPT = """你是一个数据集规格文档生成器。根据用户描述和目录扫描结果，
-生成标准化的 Dataset MD 描述文档。
+SPEC_PROMPT = """你是一个数据集规格文档生成器。你必须严格根据用户提供的数据文件信息来生成文档，
+**严禁编造不存在的信息**。如果某个信息没有提供，填写"待补充"。
 
-严格按照以下 Markdown 模板输出：
+模板：
 
 ---
 id: {dataset-id}
 name: {数据集名称}
 version: 1.0.0
-type: {类型}
+type: {从文件格式推断，image/tabular/text/timeseries/generic}
 status: active
-created: {日期}
+created: {today}
 ---
 
-# {数据集名称}
+# {name}
 
 ## 1. 数据集概述
+{仅根据用户描述填写，不要编造}
 
 ## 2. 目录结构
+{列出用户实际提供的文件，树形结构}
 
 ## 3. 数据格式
-
 | 文件 | 格式 | 大小 | 说明 |
-|------|------|------|------|
+{根据用户提供的文件信息填写，每个文件的 description 字段作为说明}
 
 ## 4. 数据 Schema
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
+{如果无法从文件信息推断，写"待补充"}
 
 ## 5. 数据来源
+{如果用户未说明，写"待补充"}
 
 ## 6. 使用场景
+{根据用户描述推断，不要编造}
 
 ## 7. 质量评估
+{如果无法评估，写"待补充"}
 
 ## 8. 访问权限
+public
 
 ## 9. 版本历史
-
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 1.0.0 | {日期} | 初始版本 |
+| 1.0.0 | {today} | 初始版本 |
 
 规则：
-1. 根据目录结构和文件格式自动推断 type（time-series/image/tabular/text/generic）
-2. 自动填充目录结构和数据格式表
-3. dataset-id 使用小写字母+连字符
-4. 只输出 Markdown"""
+1. 只使用用户提供的文件信息，不要假设或编造任何数据属性
+2. 文件描述(description)直接用作数据格式表的说明列
+3. dataset-id 用小写英文+连字符，从用户描述中提取关键词
+4. type 从实际文件格式推断: png/jpg→image, csv→tabular, edf→timeseries, txt/md→text
+5. 只输出 Markdown，不要额外解释"""
 
 
 @router.post("/scan-directory")
@@ -111,39 +139,66 @@ async def scan_directory(req: ScanDirectoryRequest):
 
 @router.post("/generate-spec")
 async def generate_spec(req: GenerateDataSpecRequest):
-    """NL + 目录信息 → MD 数据集描述文档"""
-    context = ""
-    if req.files:
-        context = "目录内容:\n"
-        for f in req.files:
-            size_str = f"{f['size'] / 1024:.1f}KB" if f['size'] < 1048576 else f"{f['size'] / 1048576:.1f}MB"
-            context += f"- {f['name']} ({f.get('format', 'unknown')}, {size_str})\n"
+    """NL + 文件信息（含描述） → MD 数据集描述文档"""
+    context_lines = ["数据文件列表:"]
+    for f in req.files:
+        size_str = f"{f['size'] / 1024:.1f}KB" if f.get('size', 0) < 1048576 else f"{f.get('size', 0) / 1048576:.1f}MB"
+        desc = f.get('description', '')
+        desc_str = f" — {desc}" if desc else ""
+        context_lines.append(f"- {f.get('name', 'unknown')} ({f.get('format', 'unknown')}, {size_str}){desc_str}")
 
     response = await llm.chat(
         messages=[
             {"role": "system", "content": SPEC_PROMPT},
-            {"role": "user", "content": f"用户描述: {req.description}\n{context}"},
+            {"role": "user", "content": f"数据集描述: {req.description}\n\n" + "\n".join(context_lines)},
         ],
-        temperature=0.5, max_tokens=100000,
+        temperature=0.3, max_tokens=100000,
     )
     return {"spec_md": response.strip()}
 
 
 @router.post("/register")
 async def register_dataset(req: RegisterDatasetRequest):
-    """注册数据集"""
+    """注册数据集 — 文件集中存储到 resources/data/datasets/{id}/"""
     if not req.spec_md.strip():
         raise HTTPException(400, "specMd 不能为空")
 
     ds_id = req.dataset_id or "custom-dataset"
+
+    # 创建数据集专用目录
+    datasets_root = registry._get_data_dir()
+    ds_dir = datasets_root / ds_id
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # 从上传的零散文件中复制到数据集目录
+    import shutil
+    file_count = 0
+    total_size = 0
+    formats = set()
+    for fp in (req.source_files or []):
+        src = Path(fp)
+        if src.exists() and src.is_file():
+            dest = ds_dir / src.name
+            if not dest.exists():
+                shutil.copy2(src, dest)
+            file_count += 1
+            total_size += dest.stat().st_size
+            formats.add(dest.suffix.lstrip(".").lower())
+
+    # 如未传入文件信息，使用请求中的值
+    if file_count == 0:
+        file_count = req.file_count
+        total_size = req.total_size
+        formats = set(req.formats)
+
     resource = {
         "id": ds_id,
         "name": req.dataset_name or ds_id,
         "raw_md": req.spec_md,
-        "data_path": req.data_path,
-        "file_count": req.file_count,
-        "total_size": req.total_size,
-        "formats": req.formats,
+        "data_path": str(ds_dir),
+        "file_count": file_count,
+        "total_size": total_size,
+        "formats": sorted(formats),
         "tags": req.tags,
     }
     registered_id = await registry.register(resource)
@@ -244,7 +299,7 @@ async def match_tools(req: MatchToolsRequest):
 
 @router.get("/{dataset_id}/preview")
 async def preview_dataset(dataset_id: str):
-    """预览数据集 — 自动匹配预览工具"""
+    """预览数据集 — 从 MD 文档解析文件列表 + 匹配预览工具"""
     entry = await registry.get(dataset_id)
     if not entry:
         raise HTTPException(404, f"Dataset '{dataset_id}' not found")
@@ -252,10 +307,23 @@ async def preview_dataset(dataset_id: str):
     spec_path = registry._get_def_dir() / f"{dataset_id}.md"
     spec_md = spec_path.read_text() if spec_path.exists() else ""
 
+    # 从 MD 文档的"数据格式"表格中解析文件列表
+    files = _parse_files_from_spec(spec_md)
+
+    # 如果 MD 中没有文件信息，扫描实际目录
+    if not files:
+        data_path = Path(entry.get("data_path", ""))
+        if data_path.exists():
+            for f in data_path.rglob("*"):
+                if f.is_file():
+                    files.append({
+                        "name": f.name, "format": f.suffix.lstrip("."),
+                        "size": f.stat().st_size, "description": "",
+                    })
+
     # 匹配预览工具
     tools = await tool_registry.list_all()
     active_tools = [t for t in tools if t.get("status") == "active"]
-
     tools_str = "\n".join(f"- {t['id']}: {t['name']}" for t in active_tools)
     prompt = f"""数据集: {spec_md[:1500]}
 可用工具: {tools_str}
@@ -269,26 +337,12 @@ async def preview_dataset(dataset_id: str):
     )
 
     preview_tool = None
-    try:
-        result = _json.loads(response.strip())
-        preview_tool = result.get("tool_id")
-    except _json.JSONDecodeError:
-        pass
-
-    # 获取文件列表
-    data_path = Path(entry.get("data_path", ""))
-    files = []
-    if data_path.exists():
-        for f in data_path.rglob("*"):
-            if f.is_file():
-                files.append({"name": f.name, "format": f.suffix.lstrip("."), "size": f.stat().st_size})
+    try: result = _json.loads(response.strip()); preview_tool = result.get("tool_id")
+    except _json.JSONDecodeError: pass
 
     return {
-        "dataset": entry,
-        "spec_md": spec_md,
-        "files": files,
-        "preview_tool": preview_tool,
-        "has_preview_tool": preview_tool is not None,
+        "dataset": entry, "spec_md": spec_md, "files": files,
+        "preview_tool": preview_tool, "has_preview_tool": preview_tool is not None,
     }
 
 
